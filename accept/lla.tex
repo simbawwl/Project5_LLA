@@ -1,0 +1,412 @@
+%\documentclass[paper]{geophysics}
+\documentclass[manuscript,ulem,graphix,revised]{geophysics}
+
+\usepackage{makecell}
+\usepackage{hanging}
+\usepackage{amsmath}
+\usepackage{marginnote}
+\usepackage{rotating}
+\usepackage{url}
+
+\begin{document}
+
+\title{P and S decomposition in anisotropic media with localized low-rank approximations}
+
+\renewcommand{\thefootnote}{\fnsymbol{footnote}} 
+
+\address{
+\footnotemark[1]Formerly Center for Lithospheric Studies, The University of Texas at Dallas; presently Demartment of Mathematics, Harbin Institute of Technology, Harbin, 150001, China.
+
+\footnotemark[2]Total E\&P USA, Inc.
+1201 Louisiana Street Suite 1800, Houston, TX, 77002 USA
+
+\footnotemark[3] Center for Lithospheric Studies, 
+The University of Texas at Dallas, \\
+800 W Campbell Road (ROC21), Richardson, TX 75080
+}
+\author{Wenlong Wang\footnotemark[1] Biaolong Hua\footnotemark[2] George A. McMechan\footnotemark[3] and Bertrand Duquet\footnotemark[2]}
+
+
+\righthead{Localized low-rank P and S decomposition}
+
+\maketitle
+\renewcommand{\figdir}{Fig} % figure directory
+
+
+\begin{abstract}
+\indent\indent
+We develop a P and S wave decomposition algorithm based on windowed Fourier transforms and a localized low-rank approximation with improved scalability and efficiency for anisotropic wavefields. The model and wavefield are divided into rectangular blocks, which don't have to be geologically constrained; low-rank approximations and P and S decomposition are performed separately in each block. An overlap-add method reduces artifacts at block boundaries caused by Fourier transforms at wavefield truncations; limited communication is required between blocks. Localization allows a lower rank to be used than global low-rank approximations while maintaining the same quality of decomposition. The algorithm is scalable, making P and S decomposition possible in complicated 3D models. Tests with both 2D and 3D synthetic data show good P and S decomposition results.
+
+\end{abstract}
+\tabl{cost_table}{
+Computation time comparison between GLA and LLA with different ranks.} 
+{
+  \begin{center}
+  \begin{small}
+    \begin{tabular}{|c|c|c|c|c|}
+      \hline
+       &
+      \makecell{GLA \\ (1 core, R=5)}&
+      \makecell{GLA \\ (1 core, R=8)}&
+      \makecell{LLA \\ (16 cores, R=5)}&
+      \makecell{LLA \\ (16 cores, R=8)}\\
+      \hline
+      \makecell{Wall clock time \\(seconds per decomposition)}&
+       43.38&
+       70.13&
+       4.31&
+       7.26\\
+      \hline
+      \makecell{Total CPU time \\(Num. of cores  $\times$ wall clock time)}&
+       43.38&
+       70.13&
+       68.96&
+       116.16\\
+      \hline
+    \end{tabular}
+  \end{small}
+  \end{center}
+}
+
+\section{Introduction}
+
+\indent\indent
+P- and S-waves are intrinsically coupled in isotropic and anisotropic elastic wavefields. Elastic reverse time migrations (RTMs) require P- and S-waves to be separated before, or as a part, of the imaging condition, to avoid generation of P and S crosstalk artifacts in the images.
+
+There are two approaches to isolate P- and S-waves in an elastic wavefield: separation and decomposition. P and S separation in an isotropic elastic wavefield uses divergence and curl operators \citep{morse53,clayton81,mora87}. Applications include the work of Sun (\citeyear{sun99}) and Sun and McMechan (\citeyear{sun01}), who perform elastic extrapolation and use divergence and curl operators to separate the P and S wavefields near the surface, followed by two acoustic RTMs, one for the P-P reflections and one for the converted P-S reflections. 
+
+However, the divergence and curl operators change the physical form of the input wavefield \citep{wenlong_ps15}. The input multi-component wavefield becomes a scalar P-wavefield and a vector S-wavefield; both amplitude and phase are changed, which may distort subsequent interpretations. To avoid this, P and S decomposition methods 
+\citep{ma03,zhang07,xiao10,zhang10,wenlong_ps15,wenlong_vsc15}
+are developed with the advantage of preserving all vector components without phase or amplitude changes. Various vector-based imaging conditions for isotropic elastic RTMs are also proposed \citep{wenlong_vct15,wenlong_vct16,wang16}.
+
+In anisotropic media, the P- and S-wave polarizations are no longer parallel or perpendicular to their propagation directions, and are called $quasi$-P (qP) and $quasi$-S (qS) waves to distinguish them from the isotropic wave modes. Divergence and curl operators cannot separate the anisotropic wavefields accurately.
+Dellinger and Etgen (\citeyear{dellinger90}) propose divergence-like and curl-like operators based on the Christoffel equation in the wavenumber domain to perform separation in anisotropic homogeneous elastic media. Yan and Sava (\citeyear{yan08}) transform the separation operator from the wavenumber domain to the space domain, and formulate nonstationary filters to separate wavefields in heterogeneous transversely isotropic media with a vertical symmetry axis (VTI), but this becomes expensive as the size of the filter operator increases to improve accuracy. 
+
+
+Zhang and McMechan (\citeyear{zhang10}) implement P and S decomposition by generalizing Dellinger and Etgen's (\citeyear{dellinger90}) theory and applying it to VTI wavefields, but its application is limited by the assumption that the model can be separated into several geological domains, each of which is homogeneous. As the model becomes complicated, Zhang and McMechan's (\citeyear{zhang10}) method becomes extremely expensive because multiple forward and inverse Fast Fourier transforms (FFTs) need to be performed at each time step. \citet{cheng14}) and \citet{Sripanich16} use low-rank approximations to build space-wavenumber mixed-domain operators, which reduces the number of FFTs required for P and S decomposition by orders of magnitude \citep{cheng16,sun16}. 
+
+Another category of methods to deal with anisotropy is the acoustic approach \citep{alkhalifah98,alkhalifah00}, in which a pseudo-acoustic equation is derived from the dispersion relation to propagate only the qP-waves. However the solid earth is more accurately represented as elastic; the elastic wave equation has fewer assumptions than its acoustic counterpart. Wave phenomena such as wave mode conversions can only be simulated with elastic wave equations, thus only the elastic approach is discussed below.
+
+In this paper, we introduce a localized low-rank approximation for anisotropic P and S decomposition with good scalability and high efficiency. This method is designed with a goal of optimization by parallel computation by domain decomposition. 
+This paper is organized as follows. First, the methodologies of P and S decomposition and low-rank approximation are briefly reviewed, then the idea of localized low-rank approximation is explained, followed by tests on synthetic data to show the decomposition results and the improvements in efficiency. 
+
+
+\section {Wavefield decomposition}
+\indent\indent
+P- and S-wave decomposition of elastic wavefields can be generalized as vector projections of wavefield particle motions onto mutually orthogonal basis (polarization) directions in the wavenumber domain \citep{zhang10};
+\begin{equation}
+\boldsymbol{U}^\alpha=\boldsymbol{p}^\alpha(\boldsymbol{p}^\alpha\cdot\boldsymbol{U})
+\label{eqn:dec}
+\end{equation}
+where $\boldsymbol{U}$ is the complete elastic wavefileld, and ${\boldsymbol{U}}^\alpha$ is the decomposed wavefield. The superscript $\alpha$ is the wave mode, with $\alpha=P$ representing a P-wave in an isotropic wavefield, or a qP-wave in an anisotropic wavefield; $\alpha=S$ represents an S-wave in an isotropic wavefield, or fast (qS1) and slow (qS2) S-waves in an anisotropic wavefield. $\boldsymbol{p}^\alpha$ is the polarization direction of the corresponding wave mode. 
+The qS1 and qS2 waves can be designated as SV and SH waves in transversly isotropic (TI) media; they cannot be uniquely decomposed in the direction of the symmetry axis (because of the kiss singularity)
+\citep{zhang10,Sripanich16,cheng14}.
+
+The polarization direction $\boldsymbol{p}$ of each wave mode is calculated by solving for the eigenvectors of matrix $\boldsymbol{\Gamma}$ in the Christoffel equation \citep{aki80, tsvankin05}
+\begin{equation}
+[\boldsymbol{\Gamma}-\rho V_\alpha^2\boldsymbol{I}]\boldsymbol{p}^\alpha=0. 
+\label{eqn:christoffel}
+\end{equation}
+In equation~\ref{eqn:christoffel}, $\boldsymbol{I}$ is the unit diagonal matrix; $\Gamma_{ik}=C_{ijkl}K_jK_l$, where $C_{ijkl}$ is the elastic stiffness tensor; $K_j$ and $K_l$ are components of the normalized plane-wave-propagation direction, and $i,j,k,l = x,y,z$. $\rho V_\alpha^2$ is an eigenvalue of matrix $\boldsymbol{\Gamma}$, $\rho$ is the density and $V_\alpha$ is the phase velocity of wave mode $\alpha$. Each eigenvalue represents a wave mode, and its polarization is described with the corresponding eigenvector $\boldsymbol{p}^\alpha$.
+
+Isotropic wavefields have the property that the P-wave polarization direction ($\boldsymbol{p}^P$) is locally parallel to its propagation direction, and the S-wave polarization direction ($\boldsymbol{p}^S$) is locally perpendicular to its propagation direction, making $\boldsymbol{p}^P$ and $\boldsymbol{p}^S$ independent of the model parameters, and the Christoffel equation~\ref{eqn:christoffel} doesn't need to be solved. The wavenumber $\boldsymbol{k}$ can be used to substitute for $\boldsymbol{p}^P$ for both P and S separation and decomposition.
+
+For anisotropic wavefields, it becomes inevitable to solve the Christoffel equation, as the polarization direction of each wave mode $\boldsymbol{p}$ depends on both wavenumber $\boldsymbol{k}$ and the stiffness tensor (as a function of spatial position $\boldsymbol{x}$),
+thus $\boldsymbol{p}$ is a space-wavenumber mixed-domain operator. When $\boldsymbol{x}$ and $\boldsymbol{k}$ are large, $\boldsymbol{p}$ becomes extremely expensive to solve with current computation techniques. Approximations need to be made to balance between accuracy and efficiency.
+
+
+\section{low-rank approximation}
+\indent\indent
+Low-rank approximation was  employed by \citet{fomel13} to construct space-wavenumber mixed-domain operators for wave extrapolations. The polarization operator $\boldsymbol{p}$ also has the form of a space-wavenumber mixed-domain operator; \citet{cheng14} propose to construct $\boldsymbol{p}$ with a global low-rank approximation (GLA).
+
+We follow the approach of \citet{cheng14} to decompose qP-waves with low-rank approximation.
+The decomposition process for all wave modes is the same but with different mixed-domain operators (polarizations).
+Equation~\ref{eqn:dec} is rewritten as
+\begin{equation}
+\begin{split}
+\mathbf{U}^{qP}_x(\mathbf{x})&=\int e^{i\mathbf{kx}}[\mathbf{p}^{qP}_{x}(\mathbf{x,k})\mathbf{p}^{qP}_{x}(\mathbf{x,k})]\mathbf{U}_x(\mathbf{k})d\mathbf{k}\\
+                    &+\int e^{i\mathbf{kx}}[\mathbf{p}^{qP}_{x}(\mathbf{x,k})\mathbf{p}^{qP}_{y}(\mathbf{x,k})]\mathbf{U}_y(\mathbf{k})d\mathbf{k} \\
+                    &+\int e^{i\mathbf{kx}}[\mathbf{p}^{qP}_{x}(\mathbf{x,k})\mathbf{p}^{qP}_{z}(\mathbf{x,k})]\mathbf{U}_z(\mathbf{k})d\mathbf{k}. 
+\end{split}
+\label{eqn:low-rank1}
+\end{equation}
+In equation~\ref{eqn:low-rank1}, only the calculation of the $x$ component is shown; the $y$ and $z$ components have similar formats. The SV and SH wave modes can be calculated by replacing $\mathbf{p}^{qP}$ with corresponding wave mode polarizations with special treatments to singularities 
+\citep{cheng14,Sripanich16}. 
+The terms in the square brackets can be combined to yield
+\begin{equation}
+\begin{split}
+\mathbf{U}^{qP}_x(\mathbf{x})&=\int e^{i\mathbf{kx}}\mathbf{W}_x(\mathbf{x,k})\mathbf{U}_x(\mathbf{k})d\mathbf{k} \\
+                    &+\int e^{i\mathbf{kx}}\mathbf{W}_y(\mathbf{x,k})\mathbf{U}_y(\mathbf{k})d\mathbf{k}\\
+                    &+\int e^{i\mathbf{kx}}\mathbf{W}_z(\mathbf{x,k})\mathbf{U}_z(\mathbf{k})d\mathbf{k}. 
+\end{split}
+\label{eqn:low-rank2}
+\end{equation}
+The mixed-domain operators $\mathbf{W}_j$ ($j=x,y,z$) in equation~\ref{eqn:low-rank2} have a low-rank separated representation \citep{fomel13}, and can be approximated with the production of three matrices with reduced dimensions 
+\begin{equation}
+\mathbf{W}_j(\mathbf{x,k})\approx \sum^{R_k}_{m=1}\sum^{R_x}_{n=1}\mathbf{B}(\mathbf{x,k}_{m})\mathbf{D}_{m n}\mathbf{C}(\mathbf{x}_{n},\mathbf{k}), 
+\label{eqn:low-rank3}
+\end{equation}
+where $\mathbf{B}$ is a mixed-domain operator with reduced wavenumber dimension with the rank $R_k$; $\mathbf{C}$ is another mixed-domain operator with reduced spatial dimension with the rank $R_x$; $\mathbf{D}_{m n}$ is an $R_k \times R_x$ matrix. The construction of the matrices $\mathbf{B}$, $\mathbf{C}$ and $\mathbf{D}$ follows the method of \citet{engquist09}, and is further explained by \citet{fomel13} and \citet{cheng14}. The computation for each term of equation~\ref{eqn:low-rank2} is then simplified using the template
+\begin{equation}
+\int e^{i\mathbf{kx}}W_j(\mathbf{x,k})\mathbf{U}_j(\mathbf{k})d\mathbf{k}\approx\sum^{R_k}_{m=1}\mathbf{B}(\mathbf{x,k}_{m}) \bigg[\sum^{R_x}_{n=1} \mathbf{D}_{m n} \Big(\int e^{i\mathbf{kx}} \mathbf{C}(\mathbf{x}_{n},\mathbf{k}) \mathbf{U}_j(\mathbf{k})d \mathbf{k}\Big)\bigg]. 
+\label{eqn:low-rank4}
+\end{equation}
+The computation cost is reduced from $O(N^2\log{N})$ when using equation~\ref{eqn:low-rank1} directly, to $O(RN\log{N})$ with equation~\ref{eqn:low-rank4}, where we set the rank $R=R_k=R_x$.
+
+There is a natural tradeoff between the rank $R$ and the accuracy. To obtain acceptable decomposition results, complicated models require larger $R$ than simple ones do, and the computation costs correspondingly increase. On the other hand, the decomposition (equations~\ref{eqn:low-rank1} and \ref{eqn:low-rank2}) is performed in the wavenumber domain, and forward and inverse FFTs are already expensive. 
+
+\section {Localized low-rank approximation}
+\indent\indent
+The major problems of using low-rank decomposition for P and S decomposition are the costs associated with a large rank and global FFTs. Inspiringly, the nonstationary filter proposed by \citet{yan09}, which is a locally-defined space-domain operator, demonstrates the rationale of decomposition into separated spatial blocks. We combine the work of \citet{yan09} and \citet{cheng14}, and propose to use a localized low-rank approximation (LLA) for P and S decomposition in anisotropic media.
+
+LLA is designed to be implemented in spatial-domain decomposition configurations, which divides the model and wavefield into multiple blocks and assigns one computational core to each block for simultaneous processing. The main idea of LLA is to apply low-rank approximation separately and simultaneously in each block, and the MPI communication zone between neighboring blocks is implemented by overlapping block edge zones. The CPU architecture used is Intel SandyBridge with MPICH (version 3.1.4) for parallel computing.
+In the following subsections, we first illustrate the advantages of LLA, and then we show the associated problems and our solution, and finally, a specific procedure for application of LLA to P and S decomposition is demonstrated.
+
+\subsection{Advantages}
+\indent\indent
+P and S decomposition with low-rank approximation requires performing forward and inverse FFTs, which are the most time consuming parts of the process. 
+Application of GLA involves global FFTs of the whole wavefield which, in 3D, has an inherent scalability limitation, and in a domain-decomposed wavefield, global FFTs require a significant communication across all blocks, which correspondingly increases the cost. LLA, on the other hand, needs only limited communications between adjacent blocks to reduce block boundary artifacts (see the following subsection).
+
+Performing short FFTs is faster than long FFTs, because the cost of an FFT is $O(N\log{N})$. Figure~\ref{fig:figure1.eps} shows a theoretical comparison of computation cost of performing an FFT over a single long array, and the combined costs when the array is separated into parts and performing multiple short FFTs. 
+Similarly, breaking the wavefield into several blocks and processing each separately reduces the overall cost of the FFTs. 
+\plot{figure1.eps}{width=0.8\textwidth}
+{
+Comparison of FFT costs of one long array (red) and the combined cost of 4 (blue), 8 (green) and 16 (black) parts as separated short arrays.
+}
+
+
+The rank required depends on the geometrical complexity of the model parameters. Complicated models need larger rank to represent them than simple ones do. LLA separates the model into local spatial blocks, each of which is simpler in structure than the global one. Thus if each block has its own mixed-domain operators $\boldsymbol{W}$, and these are approximated with local model parameters, it would require a smaller rank than using GLA to reach the same accuracy as GLA in P and S decomposition. See the synthetic tests section for examples.
+
+\subsection{Problem}
+\indent\indent
+The main problem associated with LLA is wavefield truncation caused by domain localization, which leads to artifacts when performing forward and inverse FFTs. To reduce artifacts, we use the windowed Fourier transform (WFT), which was initially employed to derive phase-space propagators \citep{steinberg95} and windowed screen propagators \citep{wu97}. The WFT is similar to the short-time Fourier transform (STFT), and is invertible by using the overlap-add (OLA) method \citep{crochiere80, liao93}, which performs FFTs within overlapped windows.
+
+\plot{figure2.eps}{width=1.0\textwidth}
+{
+A 1-D illustration of the effective overlapped windows, between adjacent blocks, obtained using the two passes of the w(x) taper in equation~\ref{eqn:bell} {\big[}in steps (2) and (4){\big]} of the 'Procedure' subsection.
+}
+A well designed window function smoothly tapers the windowed values to zero at the block boundaries to reduce discontinuity artifacts. A 1D example is shown in Figure~\ref{fig:figure2.eps}. The separated spatial segment is defined in [$\beta$, $\gamma$], and the window is defined in [$\beta-\phi$, $\gamma+\phi$]; [$\beta-\phi$, $\beta+\phi$] and [$\gamma-\phi$, $\gamma+\phi$] are overlap zones, with $\phi$ being the half width of the overlap. 
+To make WFT invertible, 
+we follow the procedure of \citeauthor{selesnick09} (\citeyear{selesnick09}), and design
+ the window function $w(x)$ that satisfies the condition \citep{princen86}
+\begin{equation}
+w^2(x)+w^2(x+L)=1,
+\label{eqn:window1}
+\end{equation}
+where $L=\gamma-\beta$. Qualified window functions are not unique. In the following examples, we use sine and cosine bounded windows \citep{malvar90} with the form
+\begin{equation}
+w(x)=\begin{cases}
+0, & \mathrm{if} \ x < \beta-\phi, \\
+\mathrm{sin}\big[\frac{\pi}{4\phi}(x-\beta+\phi)\big], & \mathrm{if} \ \beta-\phi \le x \le \beta+\phi, \\
+1, & \mathrm{if} \ \beta+\phi < x < \gamma-\phi, \\
+\mathrm{cos}\big[\frac{\pi}{4\phi}(x-\gamma+\phi)\big], & \mathrm{if} \ \gamma-\phi \le x \le \gamma+\phi, \\
+0, & \mathrm{if} \ x > \gamma+\phi.
+\end{cases}
+\label{eqn:bell}
+\end{equation}
+The spatial window function has the same shape along all axis directions.
+
+The quality of localization-based decomposition depends on the ratio of the width of the overlap zone and the dominant wavelength $\frac{2\phi}{\lambda_{dom}}$. In the synthetic tests section, the impact of $\phi$ and the dominant wavelength $\lambda_{dom}$ on the decomposition results are analyzed.
+
+\subsection{Procedure}
+\indent\indent
+A procedure for anisotropic P and S decomposition with localized low-rank approximation is as follows:
+\begin{hangparas}{.25in}{1}
+
+1) Before wavefield extrapolation, divide the model into blocks. For optimum efficiency, the block distribution is the same for the LLA and for the domain decomposition.  Within each block, calculate the mixed-domain operators $\boldsymbol{W}_j$ (equation~\ref{eqn:low-rank3}) with low-rank approximation using local model parameters.
+
+2) The P and S decomposition is independent of the wavefield extrapolation. At any time step that P and S decomposition is needed, apply the window function~\ref{eqn:bell} to each component of the vector wavefield to taper the boundaries of windowed wavefield.
+
+3) Perform FFTs, on wavefields within each block, from the space to the wavenumber domain, and apply equation~\ref{eqn:low-rank2} to obtain the decomposed qP-waves, then perform inverse FFTs to bring the decomposed qP-wavefields back to the space domain.
+
+
+4) To reconstruct the wavefield in the space domain, we multiply the locally decomposed wavefields by the same spatial window function as applied in the forward FFT \citep{crochiere80}, and add the wavefield values at the same positions in the overlap zones to obtain a global decomposed wavefield in the space domain.
+
+5) If qS-waves are needed, a subtraction of the decomposed qP-waves from the coupled wavefield gives the decomposed qS-waves in the space domain; further decomposition of qS-waves (to SV and SH waves) requires special treatment of singularities [see \citet{cheng14} and \citet{Sripanich16}].
+\end{hangparas}
+
+Note that the window functions (equation~\ref{eqn:bell}) are applied twice, once in step (2) and again in step (4), both in the space domain, and are referred as the 'analysis window' and the 'synthesis window', respectively in digital data processing \mbox{\citep{julius11}}. The effective, composite window tapers are the the squares of the sine and cosine functions in equation \ref{eqn:bell}; see Figure~\ref{fig:figure2.eps} for the resulting $\mathrm{cos^2}$ and $\mathrm{sin^2}$ shapes of the tapers. It is theoretically the same to apply the window functions in (equation~\ref{eqn:bell}) twice or to apply the squared window function only once, which has the shape in Figure~\ref{fig:figure2.eps}. However, the 'synthesis window` in the former approach can also remove spectral artifacts at the block boundaries, thereby suppressing spatial discontinuities \mbox{\citep{julius11}}. 
+
+\section{P and S decomposition tests}
+\indent\indent
+In this section, we first test the P and S decomposition algorithm with LLA, and analyze the influence of the width of the overlap zone on the quality of the decomposition. Then we use tests with synthetic data to illustrate how LLA reduces the rank and increases efficiency compared to GLA.
+For all the following tests, we use 2D and 3D eighth-order in space, and first-order in time, Lebedev staggered-grid finite-difference scheme \citep{vadim10} to solve the stress-particle velocity formulation of the anisotropic elastodynamic equations. The outer model edges have convolutional perfectly matched layer (CPML) absorbing boundaries \citep{komatitsch07} to reduce reflections from the model boundaries. 
+The configuration of the windows in LLA at a corner of a 2D model is sketched in Figure~\ref{fig:figure3.eps}. The model parameter grids are defined continuously through all the blocks, overlap zones, and the CPML boundary zones. As the absorbing boundaries already reduce the amplitudes in the boundary zones, the tapering segments don't need to be applied in the absorbing zone; the decomposed wavefield values within the absorbing zone are not plotted, in the examples below, after decomposition.
+\plot{figure3.eps}{width=0.6\textwidth}
+ {
+An example of the window configuration at the top-left corner of a 2D model. 
+The inner boundary of the window (i.e. $\beta+\phi$ or $\gamma-\phi$ in Figure~\ref{fig:figure2.eps}) are aligned with the inner boundary of the CPML zone in grey.
+The dashed lines indicate the shape of the window functions. There is no additional tapering in the CPML zone from the window function as the wavefield values are already decayed by the absorbing boundary condition. The wavefield decomposition is meaningless in the CPML zone, and thus is not shown in the plots of the decomposed results.
+}
+\subsection{Homogeneous model test}
+\indent\indent
+The first test is performed on a 2D homogeneous TTI elastic model. The model size is $256 \times 256$. The Thomsen (\citeyear{leon86}) parameters of the model are $V_{P0}=4000~\mathrm{m/s}$, $V_{S0}=2000~\mathrm{m/s}$, $\rho=2~\mathrm{g/cm^3}$, $\delta=0.2$, $\epsilon=0.4$ and the tilt angle $\theta=30^\circ$. The grid increments are \textit{h} = 10 m in both spatial dimensions and time increment \textit{dt} = 0.5 ms. An explosive source with 20 Hz dominant frequency is placed at the center of the model, so the dominant wavelength $\lambda_{dom}$ is 200 m. Figure~\ref{fig:figure4.eps}a and \ref{fig:figure4.eps}b show the $x$ and $z$ particle velocity components of a snapshot. 
+
+We first produce P and S decomposition results by GLA for use as a benchmark. Only one core is used for computation for the whole model. For application to real data, the rank is usually larger than one depending on the complexity of the model. However, in this example, the model is homogeneous, so $R=1$ is sufficient for complete decomposition.
+Figure~\ref{fig:figure4.eps}c and \ref{fig:figure4.eps}d are the $x$ and $z$ particle velocity components of the decomposed P wavefield, and Figure~\ref{fig:figure4.eps}e and \ref{fig:figure4.eps}f are the $x$ and $z$ particle velocity components of the decomposed S wavefield.
+\plot{figure4.eps}{width=1.0\textwidth}
+{(a) and (b) are the x and z particle velocity components of the coupled TTI wavefield at 0.38 s; (c) and (d) are the x and z particle velocity components of the decomposed P wavefield; (e) and (f) are the x and z particle velocity components of the decomposed S wavefield. The decomposition is achieved with GLA with $R=1$.}
+\plot{figure5.eps}{width=0.5\textwidth}
+{
+Domain decomposition separates the model and wavefields into 4 blocks and processes each separately in 4 cores. LLA shares the same configuration for the domain decomposition as for the wave extrapolation.
+}
+
+To test LLA, we rerun this example using four cores with a four-domain decomposition. The block configuration is shown in Figure~\ref{fig:figure5.eps}, and the low-rank approximation with $R=1$ is applied within each block of the wavefield. To analyze the influence of overlap zones on the decomposition results, we use overlap zones with different widths, and the decomposed qP-waves are shown in Figure~\ref{fig:figure6.eps}. If there is no wavefield tapering or overlap between adjacent blocks ($\phi=0$), serious artifacts are generated along the block boundaries (Figure~\ref{fig:figure6.eps}a and \ref{fig:figure6.eps}b). With overlap zones applied ($2\phi=160$ m), the artifacts are significantly reduced (Figure~\ref{fig:figure6.eps}c and \ref{fig:figure6.eps}d). As the length of the overlap zone increases ($2\phi=320$ m), the block boundary artifacts are further reduced (Figure~\ref{fig:figure6.eps}e and \ref{fig:figure6.eps}f). Figure~\ref{fig:figure7.eps}a-\ref{fig:figure7.eps}f contain the residuals of the decomposed qP-waves in Figure~\ref{fig:figure6.eps}a-\ref{fig:figure6.eps}f, relative to the GLA benchmark (Figure~\ref{fig:figure4.eps}c and \ref{fig:figure4.eps}d). 
+To have a quantitative comparison, we generate a series of qP-wave snapshots with the overlap width $2\phi$ linearly increasing from 0 m to 640 m, and Figure~\ref{fig:figure8.eps}a shows the sum of squares of snapshot residuals (with vertical and horizontal components combined) versus the ratio of $\frac{2\phi}{\lambda_{dom}}$, where $\lambda_{dom}$ is the dominant wavelength of the wavefield. The residuals decrease as $\frac{2\phi}{\lambda_{dom}}$ becomes larger.
+However, large overlap zones increase the communication cost between blocks (Figure~\ref{fig:figure8.eps}b); thus an acceptable balance needs to be achieved between accuracy and efficiency.
+
+
+\plot{figure6.eps}{width=1.0\textwidth}
+ {
+(a) and (b) are the x and z components of decomposed qP-waves with no overlap zone; 
+(c) and (d) are the x and z components of decomposed qP-waves with a 16-grid (160 m) overlap zone; 
+(e) and (f) are the x and z components of decomposed qP-waves with a 32-grid (320 m) overlap zone.
+}
+\plot{figure7.eps}{width=1.0\textwidth}
+ {
+(a) and (b) are the x and z components of residuals by subtracting Figure~\ref{fig:figure4.eps}c and \ref{fig:figure4.eps}d from Figure~\ref{fig:figure6.eps}a and \ref{fig:figure6.eps}b, respectively; 
+(c) and (d) are the x and z components of residuals by subtracting Figure~\ref{fig:figure4.eps}c and \ref{fig:figure4.eps}d from Figure~\ref{fig:figure6.eps}c and \ref{fig:figure6.eps}d, respectively;
+(e) and (f) are the x and z components of residuals by subtracting Figure~\ref{fig:figure4.eps}c and \ref{fig:figure4.eps}d from Figure~\ref{fig:figure6.eps}e and \ref{fig:figure6.eps}f, respectively.
+}
+\plot{figure8.eps}{width=0.6\textwidth}
+{
+a) Normalized residuals of qP-waves and b) communication cost per node in number of grid points (per decomposition) with different ratios between the width of overlap zones and the dominant wavelength ($\frac{2\phi}{\lambda_{dom}}$). 
+}
+
+The key factor in the quality of the decomposition is the width of the overlap zone relative to $\lambda_{dom}$. With the same model and LLA configuration as the previous test, we fix the width of the overlap zone to be 16 grid-points (160 m), and use sources with different dominant frequencies to excite the wavefields. 
+The wavelength is inversely proportional to the source frequency in this homogeneous model. 
+Figure~\ref{fig:figure9.eps} (from left to right) shows the decomposed qP-waves with dominant wavelengths of 267 m (15 Hz), 200 m (20 Hz), and 133 m (30 Hz), respectively. 
+As the dominant wavelength decreases, the block boundary artifacts are reduced.
+The conclusion from Figures~\ref{fig:figure8.eps}a and \ref{fig:figure9.eps} is that the width of the overlap zone should be at least one wavelength at the dominant frequency ($\frac{2\phi}{\lambda_{dom}}>1$). The communication cost increases as the overlap zone is widened. 
+
+\plot{figure9.eps}{width=1.0\textwidth}
+ {
+(a) and (b) are the x and z components of decomposed qP-waves with a source of 15 Hz ($\frac{2\phi}{\lambda_{dom}}=0.6$); 
+(c) and (d) are the x and z components of decomposed qP-waves with a source of 20 Hz ($\frac{2\phi}{\lambda_{dom}}=0.8$); 
+(e) and (f) are the x and z components of decomposed qP-waves with a source of 30 Hz ($\frac{2\phi}{\lambda_{dom}}=1.2$).
+}
+
+\subsection{BP model test}
+\indent\indent
+
+LLA allows reduction of the rank in each block, as the local model blocks necessarily have simpler structures than the global model. To demonstrate, we perform tests on a modified version of the 2007 BP Anisotropic Velocity-Analysis Benchmark dataset (\url{http://www.freeusp.org/2007_BP_Ani_Vel_Benchmark/}).  
+We illustrate the complexity of the model by plotting the distributions of model parameters $V_{P0}$ (the P-wave velocity in the symmetry axis direction) (Figure~\ref{fig:figure10.eps}a), $\theta$ (the tilt angle of the TTI symmetry axis) (Figure~\ref{fig:figure10.eps}c), and the Thomson anisotropy parameters $\delta$ (Figure~\ref{fig:figure10.eps}e), and $\epsilon$ (Figure~\ref{fig:figure10.eps}g).  The original model is 2D acoustic TTI; to create an elastic model, we approximate $V_{S0}$ by dividing the $V_{P0}$ by 2 at each grid point; the other parameters ($\epsilon$, $\delta$, $\theta$, and density) are the same as in the original acoustic model. $\theta$, $\epsilon$, and $\delta$ default to 0 in isotropic parts of the model. The model is resampled to spatial interval dx = dz = 10 m.  In Figure 10c and 10d, positive tilt angles of the symmetry axis are clockwise from vertical, in degrees.
+The parameter values are collected into bins ranging from their corresponding minimum values to maximum values (Figures~\ref{fig:figure10.eps}b, \ref{fig:figure10.eps}d, \ref{fig:figure10.eps}f and \ref{fig:figure10.eps}h). 
+
+
+To apply domain decomposition with LLA, each of the parameter models (Figures~\ref{fig:figure10.eps}a, \ref{fig:figure10.eps}c, \ref{fig:figure10.eps}f and \ref{fig:figure10.eps}h) are separated into 16 blocks (Figures~\ref{fig:figure11.eps}a, \ref{fig:figure11.eps}c, \ref{fig:figure11.eps}e and \ref{fig:figure11.eps}g) and are processed with 16 cores. 
+The distributions of the blocked model parameters are shown in Figures~\ref{fig:figure10.eps}b, \ref{fig:figure10.eps}d, \ref{fig:figure10.eps}f and \ref{fig:figure10.eps}h, respectively with their spatial correspondences. 
+
+Wavemode polarizations may have different sensitivities to model parameters. For any specific parameter, if its variations are of a wavelength larger than the block size, the blocked area will be dominated by the average parameter in each block, with a small variation around it. If the variations have wavelengths 
+smaller than the block dimension, then there will be a multimodal distribution of that parameter.
+Thus the local distributions are usually more compactly supported (Figure~\ref{fig:figure11.eps}) than their corresponding global distribution (Figure~\ref{fig:figure10.eps}), indicating a smaller variation within the local blocks. The shapes of local distributions also vary spatially. 
+Thus it is more accurate and effective to calculate wavemode polarizations with blocked local parameters than using global parameters, which reduces the rank needed for P and S decomposition  within each block, compared to the corresponding GLA calculations.
+
+\plot{figure10.eps}{width=0.7\textwidth}
+ {
+ \small{
+Global binning (b), (d), (f) and (h) for the model parameters in (a), (c), (e) and (g) respectively.
+ (a) is the BP $V_{P0}$ model, (c) is the tilt angle $\theta$ of the TI symmetry axis, (e) is the Thomsen anisotropy coefficient $\delta$, and (g) is the Thomsen anisotropy coefficient $\epsilon$. The blocked (local) distributions within the 16 windows in (a), (c), (e) and (g) are shown in Figure~\ref{fig:figure11.eps}.
+}
+}
+\plot{figure11.eps}{width=1.2\textwidth, angle=90}
+ {
+ The binned (a) velocity $V_{P0}$, (c) the tilt angle $\theta$, (e) the anisotropy parameter $\delta$, and the anisotropy parameter $\epsilon$ distributions within each windows marked in Figures~\ref{fig:figure10.eps}a, \ref{fig:figure10.eps}c, \ref{fig:figure10.eps}e and \ref{fig:figure10.eps}g, respectively.
+}
+
+An explosive source with dominant frequency 15 Hz is placed at (x = 12.0 km, z = 8.0 km). Figure~\ref{fig:figure12.eps}a and \ref{fig:figure12.eps}b show the $x$ and $z$ components of a (coupled P and S) wavefield snapshot at $t=2.4$ s in the BP model (Figure~\ref{fig:figure10.eps}a).
+Two P and S decompositions with GLA are performed with rank = 5 and rank = 8, respectively.  
+Figure~\ref{fig:figure13.eps}a and \ref{fig:figure13.eps}b show the  $z$ and $x$ components of the decomposed qP-waves using GLA with $R=8$; Figure~\ref{fig:figure13.eps}c and \ref{fig:figure13.eps}d are decomposed qS-waves obtained by subtracting the decomposed qP-waves (Figure~\ref{fig:figure13.eps}a and \ref{fig:figure13.eps}b) from the coupled waves (Figure~\ref{fig:figure12.eps}a and \ref{fig:figure12.eps}b) component by component. The decomposition is clean and complete, and we use this result as a benchmark for the following analyses. 
+
+Large ranks take more time for calculation than low ranks, but reducing the rank too low reduces decomposition accuracy. Figure~\ref{fig:figure14.eps}a - \ref{fig:figure14.eps}d are the components of decomposed qP- and qS-waves GLA $R=5$. The decomposition is not clean (e.g., the boxed area contains some residual qP-waves in the S-wave panels); compare with Figures~\ref{fig:figure13.eps}c, \ref{fig:figure15.eps}c and \ref{fig:figure16.eps}c.
+
+
+LLA operates on blocked models, which are locally less complicated than the global model (see Figures~\ref{fig:figure10.eps} and \ref{fig:figure11.eps} for comparison). Figure~\ref{fig:figure15.eps}a-\ref{fig:figure15.eps}d shows the components of the decomposed qP- and qS-waves using LLA with the same rank ($R=5$) as in Figure~\ref{fig:figure14.eps}, and $2\phi$ is set to be 320 m.
+The results of LLA (Figure~\ref{fig:figure15.eps}) are much improved; compare the boxed areas in Figure~\ref{fig:figure15.eps} (LLA) and in Figure~\ref{fig:figure14.eps} (GLA). 
+
+As with GLA, increasing the rank in LLA is also expected to improve the local decomposition accuracy. Figure~\ref{fig:figure16.eps}a-\ref{fig:figure16.eps}d are the components of the decomposed qP- and qS-waves using LLA with $R=8$. However, no significant differences can be observed between Figure~\ref{fig:figure16.eps} (LLA, $R=8$) and Figure~\ref{fig:figure15.eps} (LLA, $R=5$). The domain decomposition configurations are the same for generating the snapshots in Figure~\ref{fig:figure16.eps} ($R=8$) and Figure~\ref{fig:figure15.eps} ($R=5$). 
+
+To identify the differences in decomposition results, we subtract the benchmark qP-waves (Figures~\ref{fig:figure13.eps}a and \ref{fig:figure13.eps}b) from the qP-waves decomposed with GLA $R=5$, LLA $R=5$ and LLA $R=8$ (Figures~\ref{fig:figure14.eps}, \ref{fig:figure15.eps} and \ref{fig:figure16.eps}, respectively). The residuals are shown in Figure~\ref{fig:figure17.eps}.
+With the same rank ($R=5$), the LLA residuals (Figure~\ref{fig:figure17.eps}c and \ref{fig:figure17.eps}d) are much smaller than for GLA (Figure~\ref{fig:figure17.eps}a and \ref{fig:figure17.eps}b). LLA with increased rank $R=8$ doesn't show significant improvements in decomposition (Figure~\ref{fig:figure17.eps}e and \ref{fig:figure17.eps}f), indicating $R=5$ is sufficient for P and S decomposition with LLA for this example, and the results are comparable to GLA with $R=8$. In Figure~\ref{fig:figure17.eps}c-\ref{fig:figure17.eps}d, some slight artifacts are still visible in the overlap zones in LLA.  
+
+The computation times of each scheme are shown in Table~\ref{tbl:cost_table}. Generally, the wall clock time of LLA is much less than that of GLA, as more cores are used; a large rank increases the computation cost for both GLA and LLA. The total CPU times of LLA (the product of the wall clock time and the number of cores) are still longer than those of GLA, mainly because of the communications of overlap zones between adjacent blocks. However, the main advantage of LLA is its scalability, especially when the model is too big to fit into a single core, and performing global FFTs of domain decomposed wavefields requires a significant amount of communication, which can be overwhelmingly expensive.
+Also note that LLA ($R=5$) with 16 cores has the same decomposition quality as GLA ($R=8$) with one core, and the total CPU time of LLA is slightly smaller than that of GLA.
+
+
+\plot{figure12.eps}{width=1.0\textwidth}
+{
+The (a) z and (b) x components of a snapshot at $t=2.4$ in the BP model (Figure~\ref{fig:figure10.eps}a).
+}
+\plot{figure13.eps}{width=1.0\textwidth}
+{
+The (a) z and (b) x components of the decomposed qP-waves, and (c) z and (d) x components of the decomposed qS-waves with GLA and $R=8$. This result is used as a benchmark for following analysis in Figures~\ref{fig:figure14.eps} to \ref{fig:figure16.eps}.
+}
+\plot{figure14.eps}{width=1.0\textwidth}
+{
+The (a) z and (b) x components of the decomposed qP-waves, and (c) z and (d) x components of the decomposed qS-waves with GLA and $R=5$. Compare with Figures~\ref{fig:figure13.eps} to \ref{fig:figure16.eps}.
+}
+\plot{figure15.eps}{width=1.0\textwidth}
+{
+The (a) z and (b) x components of the decomposed qP-wavefield, and (c) z and (d) x components of the decomposed qS-waves with LLA and $R=5$ for each separated block. Compare with Figures~\ref{fig:figure13.eps} to \ref{fig:figure16.eps}.
+}
+\plot{figure16.eps}{width=1.0\textwidth}
+{
+The (a) z and (b) x components of the decomposed qP-wavefield, and (c) z and (d) x components of the decomposed qS-waves with LLA and $R=8$ for each separated block. Compare with Figures~\ref{fig:figure13.eps} to \ref{fig:figure15.eps}.
+}
+\plot{figure17.eps}{width=0.8\textwidth}
+{
+(a) and (b) are the qP-wave residuals obtained by subtracting Figure~\ref{fig:figure14.eps}c and \ref{fig:figure14.eps}d (using GLA and $R=5$) from Figure~\ref{fig:figure13.eps}c and \ref{fig:figure13.eps}d (using GLA and $R=8$); 
+(c) and (d) are the qP-wave residuals by subtracting Figure~\ref{fig:figure15.eps}c and \ref{fig:figure15.eps}d (using LLA and $R=5$) from Figure~\ref{fig:figure13.eps}c and \ref{fig:figure13.eps}d (using GLA and $R=8$);
+(e) and (f) are the qP-wave residuals by subtracting Figure~\ref{fig:figure16.eps}c and \ref{fig:figure16.eps}d (using LLA and $R=8$) from Figure~\ref{fig:figure13.eps}c and \ref{fig:figure13.eps}d (using GLA and $R=8$).
+}
+
+
+\subsection{3D elastic TTI SEAM I earth model test}
+\indent\indent
+The most significant application is in 3D models, where the GLA is too expensive (or impossible) to apply. We construct a 3D example using the 3D elastic TTI SEAM I earth model    (\url{seg.org/News-Resources/Reserach-Data/Licensed-Data/Subsalt-elastic-tti-earth-model}), which is composed of grids containing the P- and S-velocites, density, and the anisotropy parameters (among other rock properties). The S velocity model is modified to reduce grid dispersion. The overall model geometry can be seen in \citet{fehler11}. Figure~\ref{fig:figure18.eps} shows three orthogonal slices through the $V_{P0}$ volume containing the portion of the model used for this example; the size of this reduced volume (in grid points) is $600\times 600 \times 600$, and the spatial interval of the model is dx = dy = dz = 10 m. The source is placed at (x, y, z)=(14.1, 27.7, 0.2) km. An 8 by 8 by 8 domain decomposition is implemented for parallel computation, and we use LLA $R=6$ for P and S decomposition. 
+
+Figure~\ref{fig:figure19.eps}a-c are  the x- y- and z-components of a particle velocity snapshot at $t=1.4$ s. The coupled wavefield can be decomposed into qP and qS wavefields. We calculate only the decomposed qP-waves for demonstration; the particle velocity components ($P_x$, $P_y$ and $P_z$) are plotted in Figure~\ref{fig:figure19.eps}d-\ref{fig:figure19.eps}f. The qS wavefields can be visually estimated from these slices by subtracting (a) - (d), (b) - (e), and (c) - (f).  
+\plot{figure18.eps}{width=0.8\textwidth}
+{
+$V_{P0}$ of a portion of the elastic TTI SEAM I earth model.
+}
+\plot{figure19.eps}{width=1.0\textwidth}
+{
+The (a) x, (b) y and (c) z components of a particle velocity wavefield snapshot at $t=1.4$ in the SEAM model, and the (d) x, (e) y and (f) z components of the decomposed qP-wavefield with LLA $R=6$. Both wavefield extrapolation and P and S decomposition are performed with 8 by 8 by 8 domain decomposition for parallel computation.
+}
+
+
+%-----------------------------------------
+\section{Discussion}
+\indent\indent
+LLA is tested above on only TI anisotropic models, but the decomposition of qP and qS waves applies for all anisotropic symmetries; however, further decomposition of SV and SH waves needs careful treatment of singularities \mbox{\citep{cheng16, Sripanich16}}. The most important improvement in this paper is the enhanced scalability and efficiency of the anisotropic P and S decomposition algorithm, especially in 3D models. The decompositions provide the foundation for other subsequent processing techniques, including RTM and full-wavefield inversions with both source and receiver wavefields decomposed. An imaging condition that directly uses decomposed qP- and qS-waves for anisotropic RTM is currently under investigation \citep[e.g.,][]{wang16}. However, the LLA algorithm can be easily applied to P and S separation, which is faster than P and S decomposition, to produce single-component (pressure) qP-waves, which is implemented in many RTM software packages.
+
+One disadvantage of LLA is that, if the wavefield contains low wavenumber components, the overlap zone needs to be widened to reduce block-boundary artifacts, which increases the data communication between subdomains in domain decomposition. Another factor associated with the low wavenumber signal is that, the LLA is based on localized Fourier transforms, and low wavenumber parts of the signal are progressively not represented as the length of the FFTs become shorter. So a balance also needs to be determined between the cutoff low wavenumbers/frequencies and the size of the blocks (and hence their number) that are distributed. 
+
+3D anisotropic elastic RTMs are expected to benefit the most from the proposed method. Applications of this method to full-wave inversions (FWI) need further investigation, as the low wavenumber components of the wavefields may be distorted at block boundaries if the overlap zone is not wide enough. However, as long as the low wavenumber components are already present in the initial model(as is usually required for traditional FWI), this defines a lower limit to the block dimensions in the decomposition, and the data must contain the information at all higher wavenumbers to provide complete wavenumber illumination.
+
+Theoretically, the block distribution for LLA doesn't need to be the same as that in the domain decomposition as they are designed for different purposes. Ideally the blocks should follow the geological structures to reduce the complexity within each block, and thus reduce the rank required for P and S decompositions. However the main reason to develop LLA is to reduce computation and communication costs, and having a uniform block structure maximizes the computation efficiency. In domain decomposition configurations, overlapping ghost zones are used to communicate between adjacent blocks for finite differencing, and the overlap can also be used as the overlap zones for LLA with simple modifications. 
+
+Currently, the rank in all blocks are set to be the same for load balancing. However, the optimized rank depends locally on the complexity of the structure within the model blocks. Thus, a further improvement to the algorithm is to quantify the complexity of the blocked model and modify the rank and size of each block to reach the maximum efficiency, as well as load balancing.
+
+
+%-----------------------------------------
+\section{Conclusions}
+\indent\indent
+We propose a localized low-rank approximation algorithm that is highly scalable, making P and S decompositions in complicated, large (especially 3D) models possible.
+The algorithm is designed in a domain decomposition configuration, and thus is naturally parallelized. Analysis of the factors that influence the quality of localized low-rank approximation demonstrates, with examples, that localized low-rank approximations can more completely decompose the wavefield than the global one with the same rank. 
+Tests on synthetic data show high-quality decomposition results for both 2D and 3D anisotropic wavefields.
+This approach can be potentially applied in anisotropic elastic reverse-time migrations. Having demonstrated the overall flexibility of P-S decomposition in anisotropic media with a blocked, low-rank approximation above, provides motivations for future optimizations.
+
+\section{Acknowledgments}
+\indent\indent
+The research leading to this paper is supported by the Sponsors of the
+UT-Dallas Geophysical Consortium and the Outstanding Young Talent Program (AUGA5710053217) from the Harbin Institute of Technology. The 2007 BP Benchmark model was created by Hemang Shah, and is provided courtesy of BP Exploration Operation Company Limited. A portion of the computations were done at the Texas Advanced Computing Center. The authors thank Dr. Paul Williamson for helpful discussion and access to Total's computation facilities. Constructive comments by the Associate Editor Tariq Alkhalifah, by Jiubing Cheng, and two anonymous reviewers are much appreciated. This paper is Contribution No. xxxx from the Department of Geosciences at the University of Texas at Dallas. 
+
+
+\newpage
+
+\bibliographystyle{seg}  % style file is seg.bst
+\bibliography{lla}
+
+\end{document}
